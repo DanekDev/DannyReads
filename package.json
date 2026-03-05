@@ -1,0 +1,60 @@
+{
+  "name": "md-reader",
+  "version": "1.0.0",
+  "description": "Markdown Reader & Editor for macOS",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac --arm64"
+  },
+  "dependencies": {
+    "highlight.js": "^11.11.0",
+    "marked": "^15.0.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.dannyreads.app",
+    "productName": "DannyReads",
+    "extraResources": [
+      {
+        "from": "vendor/",
+        "to": "vendor/"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "fileAssociations": [
+        {
+          "ext": [
+            "md",
+            "markdown",
+            "mdown"
+          ],
+          "name": "Markdown Document",
+          "role": "Editor"
+        },
+        {
+          "ext": [
+            "puml",
+            "plantuml",
+            "pu",
+            "wsd"
+          ],
+          "name": "PlantUML Document",
+          "role": "Editor"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:;">
+  <title>DannyReads</title>
+  <link rel="stylesheet" href="./node_modules/highlight.js/styles/github.css" id="hljs-light">
+  <link rel="stylesheet" href="./node_modules/highlight.js/styles/github-dark.css" id="hljs-dark" disabled>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body data-theme="light">
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <span class="file-name" id="file-name">Untitled</span>
+    </div>
+    <div class="toolbar-center">
+      <div class="mode-toggle">
+        <button id="edit-btn" class="mode-btn active" title="Edit mode (Cmd+Shift+P)">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M11.5 1.5L14.5 4.5L5 14H2V11L11.5 1.5Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Edit
+        </button>
+        <button id="preview-btn" class="mode-btn" title="Preview mode (Cmd+Shift+P)">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M1 8C1 8 3.5 3 8 3C12.5 3 15 8 15 8C15 8 12.5 13 8 13C3.5 13 1 8 1 8Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+          Preview
+        </button>
+      </div>
+    </div>
+    <div class="toolbar-right">
+      <div class="zoom-controls" id="zoom-controls" style="display:none;">
+        <button id="zoom-out-btn" class="icon-btn" title="Zoom out (Cmd+-)">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M4 8H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <span class="zoom-label" id="zoom-label">100%</span>
+        <button id="zoom-in-btn" class="icon-btn" title="Zoom in (Cmd++)">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M8 4V12M4 8H12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button id="zoom-reset-btn" class="icon-btn" title="Reset zoom (Cmd+0)">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="3" y="3" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        </button>
+      </div>
+      <button id="render-btn" class="icon-btn" title="Re-render preview (Cmd+Shift+R)" style="display:none;">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <path d="M1.5 9A7.5 7.5 0 0 1 14.1 3.9M16.5 9A7.5 7.5 0 0 1 3.9 14.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          <path d="M14 1V4H17M4 14V17H1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button id="theme-btn" class="icon-btn" title="Toggle theme (Cmd+Shift+T)">
+        <svg id="theme-icon-light" width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <circle cx="9" cy="9" r="4" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M9 1V3M9 15V17M1 9H3M15 9H17M3.3 3.3L4.7 4.7M13.3 13.3L14.7 14.7M14.7 3.3L13.3 4.7M4.7 13.3L3.3 14.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <svg id="theme-icon-dark" width="18" height="18" viewBox="0 0 18 18" fill="none" style="display:none;">
+          <path d="M16 10.3A7 7 0 1 1 7.7 2 5.5 5.5 0 0 0 16 10.3Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div class="tab-bar">
+    <div class="tab-list" id="tab-list"></div>
+    <button class="tab-new-btn" id="tab-new-btn" title="New Tab (Cmd+N)">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M7 1V13M1 7H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Main content area -->
+  <div class="content">
+    <textarea id="editor" class="editor" spellcheck="false" placeholder="Start writing Markdown..."></textarea>
+    <div id="preview" class="preview" style="display: none;">
+      <div id="preview-inner" class="markdown-body"></div>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="statusbar">
+    <span id="status-info">Words: 0 &nbsp;|&nbsp; Lines: 0</span>
+    <span id="status-mode">Edit</span>
+  </div>
+
+  <script src="./renderer.js"></script>
+</body>
+</html>
