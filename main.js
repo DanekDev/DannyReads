@@ -257,6 +257,15 @@ ipcMain.handle('render-plantuml', (_, code) => {
 
 // IPC Handlers
 ipcMain.handle('open-file', () => openFile());
+ipcMain.handle('reload-file', async (_, filePath) => {
+  if (!filePath) return null;
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    return { content };
+  } catch (err) {
+    return null;
+  }
+});
 ipcMain.handle('save-file', (_, content) => saveFile(content));
 ipcMain.handle('save-file-as', (_, content) => saveFileAs(content));
 ipcMain.on('content-modified', () => {

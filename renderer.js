@@ -238,6 +238,23 @@ function renderPreview() {
   previewInner.innerHTML = html;
 }
 
+async function reloadAndRender() {
+  const tab = getActiveTab();
+  if (!tab || !tab.filePath) {
+    renderPreview();
+    return;
+  }
+  const result = await window.api.reloadFile(tab.filePath);
+  if (result && result.content !== undefined) {
+    tab.content = result.content;
+    tab.isModified = false;
+    editor.value = tab.content;
+    updateStats();
+    renderTabBar();
+  }
+  renderPreview();
+}
+
 // ===== Theme =====
 function setTheme(theme) {
   currentTheme = theme;
@@ -318,7 +335,7 @@ editor.addEventListener('input', () => {
 editBtn.addEventListener('click', () => setMode('edit'));
 previewBtn.addEventListener('click', () => setMode('preview'));
 themeBtn.addEventListener('click', toggleTheme);
-renderBtn.addEventListener('click', renderPreview);
+renderBtn.addEventListener('click', reloadAndRender);
 zoomInBtn.addEventListener('click', zoomIn);
 zoomOutBtn.addEventListener('click', zoomOut);
 zoomResetBtn.addEventListener('click', zoomReset);
@@ -405,7 +422,7 @@ window.api.onToggleMode(toggleMode);
 window.api.onToggleTheme(toggleTheme);
 window.api.onRequestSave(handleSave);
 window.api.onRequestSaveAs(handleSaveAs);
-window.api.onRenderPreview(renderPreview);
+window.api.onRenderPreview(reloadAndRender);
 
 // ===== Init =====
 (function init() {

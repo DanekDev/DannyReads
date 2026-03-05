@@ -73,6 +73,7 @@ function renderMarkdown(text) {
 
 contextBridge.exposeInMainWorld('api', {
   openFile: () => ipcRenderer.invoke('open-file'),
+  reloadFile: (filePath) => ipcRenderer.invoke('reload-file', filePath),
   saveFile: (content) => ipcRenderer.invoke('save-file', content),
   saveFileAs: (content) => ipcRenderer.invoke('save-file-as', content),
   notifyModified: () => ipcRenderer.send('content-modified'),
