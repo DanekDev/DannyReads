@@ -16,10 +16,14 @@ if [[ "$(uname -m)" != "arm64" ]]; then
   exit 1
 fi
 
-# Check Node.js
+# Check Node.js — install via Homebrew if missing
 if ! command -v node &>/dev/null; then
-  echo "Error: Node.js not found. Install it: https://nodejs.org/"
-  exit 1
+  echo "Node.js not found. Installing via Homebrew..."
+  if ! command -v brew &>/dev/null; then
+    echo "Error: Homebrew not found. Install it: https://brew.sh/"
+    exit 1
+  fi
+  brew install node
 fi
 
 echo "[1/5] Installing dependencies..."
