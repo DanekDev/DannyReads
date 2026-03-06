@@ -26,14 +26,6 @@ try {
           if (lang === 'plantuml' || lang === 'puml') {
             const id = 'puml-' + Math.random().toString(36).slice(2, 10);
             let src = text.includes('@start') ? text : `@startuml\n${text}\n@enduml`;
-            // Auto-inject allowmixing when diagram mixes element types (e.g. package + state)
-            if (!src.includes('allowmixing')) {
-              const hasPackage = /\bpackage\b/.test(src);
-              const hasState = /\bstate\b/.test(src);
-              if (hasPackage && hasState) {
-                src = src.replace(/(^@start\w+[^\n]*)/m, '$1\nallowmixing');
-              }
-            }
             // Fire async render
             ipcRenderer.invoke('render-plantuml', src).then((svgHtml) => {
               const el = document.getElementById(id);
