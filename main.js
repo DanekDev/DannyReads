@@ -317,6 +317,8 @@ app.on('open-file', (event, filePath) => {
   event.preventDefault();
   if (mainWindow && mainWindow.webContents) {
     openFile(filePath);
+    mainWindow.show();
+    app.focus({ steal: true });
   } else {
     pendingFile = filePath;
   }
