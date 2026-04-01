@@ -101,4 +101,28 @@ contextBridge.exposeInMainWorld('api', {
   onRenderPreview: (callback) => {
     ipcRenderer.on('render-preview', () => callback());
   },
+  onNextTab: (callback) => {
+    ipcRenderer.on('next-tab', () => callback());
+  },
+  onPrevTab: (callback) => {
+    ipcRenderer.on('prev-tab', () => callback());
+  },
+  onGoToTab: (callback) => {
+    ipcRenderer.on('go-to-tab', (_, index) => callback(index));
+  },
+  exportPdf: (html, fileName) => ipcRenderer.invoke('export-pdf', html, fileName),
+  onExportPdf: (callback) => {
+    ipcRenderer.on('export-pdf', () => callback());
+  },
+  onFind: (callback) => {
+    ipcRenderer.on('find', () => callback());
+  },
+  onReplaceAll: (callback) => {
+    ipcRenderer.on('replace-all', () => callback());
+  },
+  findInPage: (text, options) => ipcRenderer.send('find-in-page', text, options),
+  stopFindInPage: () => ipcRenderer.send('stop-find-in-page'),
+  onFoundInPage: (callback) => {
+    ipcRenderer.on('found-in-page-result', (_, result) => callback(result));
+  },
 });

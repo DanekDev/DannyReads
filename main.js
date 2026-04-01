@@ -27,6 +27,10 @@ function createWindow() {
 
   mainWindow.loadFile('index.html');
 
+  mainWindow.webContents.on('found-in-page', (_, result) => {
+    mainWindow.webContents.send('found-in-page-result', result);
+  });
+
   mainWindow.webContents.on('did-finish-load', () => {
     // Open file passed via CLI or Finder
     const fileToOpen = pendingFile || process.argv.find(a => /\.(md|markdown|txt|puml|plantuml|pu|wsd)$/.test(a));
@@ -174,6 +178,12 @@ function buildMenu() {
           accelerator: 'CmdOrCtrl+Shift+S',
           click: () => mainWindow.webContents.send('request-save-as'),
         },
+        { type: 'separator' },
+        {
+          label: 'Export as PDF...',
+          accelerator: 'CmdOrCtrl+Shift+E',
+          click: () => mainWindow.webContents.send('export-pdf'),
+        },
       ],
     },
     {
@@ -186,6 +196,17 @@ function buildMenu() {
         { role: 'copy' },
         { role: 'paste' },
         { role: 'selectAll' },
+        { type: 'separator' },
+        {
+          label: 'Find...',
+          accelerator: 'CmdOrCtrl+F',
+          click: () => mainWindow.webContents.send('find'),
+        },
+        {
+          label: 'Replace All',
+          accelerator: 'CmdOrCtrl+Shift+M',
+          click: () => mainWindow.webContents.send('replace-all'),
+        },
       ],
     },
     {
@@ -220,6 +241,23 @@ function buildMenu() {
         { role: 'minimize' },
         { role: 'zoom' },
         { type: 'separator' },
+        {
+          label: 'Next Tab',
+          accelerator: 'CmdOrCtrl+Shift+]',
+          click: () => mainWindow.webContents.send('next-tab'),
+        },
+        {
+          label: 'Previous Tab',
+          accelerator: 'CmdOrCtrl+Shift+[',
+          click: () => mainWindow.webContents.send('prev-tab'),
+        },
+        { type: 'separator' },
+        ...Array.from({ length: 9 }, (_, i) => ({
+          label: `Tab ${i + 1}`,
+          accelerator: `CmdOrCtrl+${i + 1}`,
+          click: () => mainWindow.webContents.send('go-to-tab', i),
+        })),
+        { type: 'separator' },
         { role: 'front' },
       ],
     },
@@ -253,6 +291,21 @@ ipcMain.handle('render-plantuml', (_, code) => {
     child.stdin.write(code);
     child.stdin.end();
   });
+});
+
+// Find in page
+ipcMain.on('find-in-page', (_, text, options) => {
+  if (!mainWindow) return;
+  if (text) {
+    mainWindow.webContents.findInPage(text, options || {});
+  } else {
+    mainWindow.webContents.stopFindInPage('clearSelection');
+  }
+});
+
+ipcMain.on('stop-find-in-page', () => {
+  if (!mainWindow) return;
+  mainWindow.webContents.stopFindInPage('clearSelection');
 });
 
 // IPC Handlers
@@ -296,6 +349,72 @@ ipcMain.handle('confirm-close', async (_, tabId, fileName) => {
   return 'cancel';
 });
 
+// PDF Export
+ipcMain.handle('export-pdf', async (_, html, fileName) => {
+  const defaultName = fileName ? fileName.replace(/\.[^.]+$/, '.pdf') : 'export.pdf';
+  const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: defaultName,
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+  if (canceled || !filePath) return { success: false };
+
+  // A4 at 96dpi ≈ 794x1123px; use content width matching margins
+  const pdfWindow = new BrowserWindow({
+    show: false,
+    width: 630,
+    height: 900,
+    webPreferences: { offscreen: true },
+  });
+
+  const cssPath = path.join(__dirname, 'styles.css').replace(/\\/g, '/');
+  const hljsLight = path.join(__dirname, 'node_modules/highlight.js/styles/github.css').replace(/\\/g, '/');
+  const fullHtml = `<!DOCTYPE html><html><head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="file://${hljsLight}">
+    <link rel="stylesheet" href="file://${cssPath}">
+    <style>
+      body { background: #fff; color: #1d1d1f; padding: 0; margin: 0; display: block; overflow: visible; height: auto; font-size: 13px; }
+      .markdown-body { max-width: 100%; margin: 0; padding: 0; font-size: 13px; line-height: 1.6; }
+      .markdown-body h1 { font-size: 1.6em; }
+      .markdown-body h2 { font-size: 1.3em; }
+      .markdown-body h3 { font-size: 1.1em; }
+      .markdown-body table { font-size: 12px; }
+      .markdown-body pre { font-size: 11px; }
+      .markdown-body th, .markdown-body td { padding: 8px 12px; border: 1px solid #d2d2d7; text-align: left; }
+      .markdown-body th { font-weight: 600; background: #f8f9fa; }
+      .markdown-body tr:nth-child(even) { background: #f8f9fa; }
+      .markdown-body table { width: 100%; border-collapse: collapse; margin-bottom: 1em; }
+      .markdown-body blockquote { margin: 0 0 1em 0; padding: 0.5em 1em; border-left: 4px solid #d2d2d7; background: #f8f9fa; border-radius: 0 4px 4px 0; color: #555; }
+      .markdown-body blockquote p:last-child { margin-bottom: 0; }
+      .markdown-body code { font-family: 'SF Mono', Menlo, monospace; font-size: 0.875em; padding: 0.2em 0.4em; background: #f5f5f7; border-radius: 4px; }
+      .markdown-body pre code { padding: 0; background: transparent; }
+      .markdown-body pre, .markdown-body table, .markdown-body blockquote { break-inside: avoid; }
+      .plantuml-diagram { break-inside: avoid; }
+      img { max-width: 100%; }
+    </style>
+  </head><body data-theme="light"><div class="markdown-body">${html}</div></body></html>`;
+
+  await pdfWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(fullHtml));
+
+  // Wait for images to load
+  await new Promise(resolve => setTimeout(resolve, 500));
+
+  try {
+    const pdfData = await pdfWindow.webContents.printToPDF({
+      pageSize: 'A4',
+      printBackground: true,
+      margins: { top: 0.6, bottom: 0.6, left: 0.8, right: 0.8 },
+    });
+    await fs.writeFile(filePath, pdfData);
+    pdfWindow.close();
+    return { success: true, filePath };
+  } catch (err) {
+    pdfWindow.close();
+    dialog.showErrorBox('PDF Export Error', err.message);
+    return { success: false };
+  }
+});
+
 // App lifecycle
 app.whenReady().then(() => {
   buildMenu();
@@ -307,7 +426,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
+  if (app.isReady() && BrowserWindow.getAllWindows().length === 0) {
     createWindow();
   }
 });

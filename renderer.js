@@ -25,6 +25,15 @@ const zoomLabel = document.getElementById('zoom-label');
 const zoomInBtn = document.getElementById('zoom-in-btn');
 const zoomOutBtn = document.getElementById('zoom-out-btn');
 const zoomResetBtn = document.getElementById('zoom-reset-btn');
+const searchBar = document.getElementById('search-bar');
+const searchInput = document.getElementById('search-input');
+const replaceInput = document.getElementById('replace-input');
+const searchCount = document.getElementById('search-count');
+const searchPrevBtn = document.getElementById('search-prev-btn');
+const searchNextBtn = document.getElementById('search-next-btn');
+const searchCloseBtn = document.getElementById('search-close-btn');
+const replaceBtn = document.getElementById('replace-btn');
+const replaceAllBtn = document.getElementById('replace-all-btn');
 
 let currentTheme = 'light';
 const ZOOM_STEP = 10;
@@ -423,6 +432,186 @@ window.api.onToggleTheme(toggleTheme);
 window.api.onRequestSave(handleSave);
 window.api.onRequestSaveAs(handleSaveAs);
 window.api.onRenderPreview(reloadAndRender);
+window.api.onFind(openSearch);
+window.api.onReplaceAll(replaceAll);
+window.api.onExportPdf(async () => {
+  const tab = getActiveTab();
+  // Render markdown to HTML for export
+  let source = editor.value;
+  if (tab && tab.isPuml) {
+    source = '```plantuml\n' + source + '\n```';
+  }
+  let html = window.api.renderMarkdown(source);
+  const dirPath = tab ? tab.dirPath : null;
+  if (dirPath) {
+    html = html.replace(
+      /(<img\s[^>]*src=")(?!https?:\/\/|data:|file:\/\/)([^"]*")/g,
+      `$1file://${dirPath}/$2`
+    );
+  }
+  // Wait for PlantUML diagrams to render
+  const pumlDivs = previewInner.querySelectorAll('.plantuml-diagram');
+  if (pumlDivs.length > 0) {
+    // Switch to preview to trigger rendering, grab the final HTML
+    const wasEdit = tab && tab.mode === 'edit';
+    if (wasEdit) renderPreview();
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    html = previewInner.innerHTML;
+    if (wasEdit) setModeInternal('edit');
+  }
+  const fileName = tab ? tab.fileName : 'Untitled';
+  await window.api.exportPdf(html, fileName);
+});
+window.api.onNextTab(() => {
+  if (tabs.length < 2) return;
+  const idx = tabs.findIndex(t => t.id === activeTabId);
+  const next = (idx + 1) % tabs.length;
+  switchTab(tabs[next].id);
+});
+window.api.onPrevTab(() => {
+  if (tabs.length < 2) return;
+  const idx = tabs.findIndex(t => t.id === activeTabId);
+  const prev = (idx - 1 + tabs.length) % tabs.length;
+  switchTab(tabs[prev].id);
+});
+window.api.onGoToTab((index) => {
+  if (index >= 0 && index < tabs.length) {
+    switchTab(tabs[index].id);
+  }
+});
+
+// ===== Search & Replace (using Electron findInPage) =====
+let searchQuery = '';
+
+function openSearch() {
+  searchBar.style.display = 'flex';
+  searchInput.focus();
+  const sel = editor.value.substring(editor.selectionStart, editor.selectionEnd);
+  if (sel && sel.length < 200 && !sel.includes('\n')) {
+    searchInput.value = sel;
+  }
+  if (searchInput.value) {
+    triggerFind();
+  }
+  searchInput.select();
+}
+
+function closeSearch() {
+  searchBar.style.display = 'none';
+  searchQuery = '';
+  searchCount.textContent = '';
+  window.api.stopFindInPage();
+  editor.focus();
+}
+
+function triggerFind(forward = true, findNext = false) {
+  const query = searchInput.value;
+  if (!query) {
+    searchQuery = '';
+    searchCount.textContent = '';
+    window.api.stopFindInPage();
+    return;
+  }
+  searchQuery = query;
+  window.api.findInPage(query, { forward, findNext });
+}
+
+function searchNext() {
+  if (!searchInput.value) return;
+  window.api.findInPage(searchInput.value, { forward: true, findNext: true });
+}
+
+function searchPrev() {
+  if (!searchInput.value) return;
+  window.api.findInPage(searchInput.value, { forward: false, findNext: true });
+}
+
+function replaceCurrent() {
+  const query = searchInput.value;
+  const replacement = replaceInput.value;
+  if (!query) return;
+
+  // Replace the current selection if it matches
+  const selStart = editor.selectionStart;
+  const selEnd = editor.selectionEnd;
+  const selected = editor.value.substring(selStart, selEnd);
+  if (selected.toLowerCase() === query.toLowerCase()) {
+    editor.value = editor.value.substring(0, selStart) + replacement + editor.value.substring(selEnd);
+    editor.setSelectionRange(selStart + replacement.length, selStart + replacement.length);
+    markModified();
+    updateStats();
+    // Find next
+    triggerFind(true, false);
+  } else {
+    // No match selected, find first
+    triggerFind();
+  }
+}
+
+function replaceAll() {
+  const query = searchInput.value;
+  const replacement = replaceInput.value;
+  if (!query) return;
+
+  const regex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  const text = editor.value;
+  const newText = text.replace(regex, replacement);
+  if (newText === text) return;
+
+  editor.value = newText;
+  const tab = getActiveTab();
+  if (tab) tab.content = newText;
+  markModified();
+  updateStats();
+  triggerFind();
+}
+
+function markModified() {
+  const tab = getActiveTab();
+  if (tab && !tab.isModified) {
+    tab.isModified = true;
+    window.api.notifyModified();
+    renderTabBar();
+  }
+}
+
+// Listen for findInPage results
+window.api.onFoundInPage((result) => {
+  if (result.finalUpdate) {
+    searchCount.textContent = result.matches > 0
+      ? `${result.activeMatchOrdinal} / ${result.matches}`
+      : 'No results';
+  }
+});
+
+searchInput.addEventListener('input', () => triggerFind());
+
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.shiftKey) {
+    e.preventDefault();
+    searchPrev();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    searchNext();
+  } else if (e.key === 'Escape') {
+    closeSearch();
+  }
+});
+
+replaceInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    replaceCurrent();
+  } else if (e.key === 'Escape') {
+    closeSearch();
+  }
+});
+
+searchPrevBtn.addEventListener('click', searchPrev);
+searchNextBtn.addEventListener('click', searchNext);
+searchCloseBtn.addEventListener('click', closeSearch);
+replaceBtn.addEventListener('click', replaceCurrent);
+replaceAllBtn.addEventListener('click', replaceAll);
 
 // ===== Init =====
 (function init() {
