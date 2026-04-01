@@ -34,8 +34,17 @@ const searchNextBtn = document.getElementById('search-next-btn');
 const searchCloseBtn = document.getElementById('search-close-btn');
 const replaceBtn = document.getElementById('replace-btn');
 const replaceAllBtn = document.getElementById('replace-all-btn');
+const sidebar = document.getElementById('sidebar');
+const sidebarTree = document.getElementById('sidebar-tree');
+const sidebarTitle = document.getElementById('sidebar-title');
+const sidebarOpenFolderBtn = document.getElementById('sidebar-open-folder-btn');
+const sidebarResize = document.getElementById('sidebar-resize');
 
 let currentTheme = 'light';
+let sidebarVisible = false;
+let currentFolderPath = null;
+let folderTree = null;
+let expandedDirs = new Set();
 const ZOOM_STEP = 10;
 const ZOOM_MIN = 30;
 const ZOOM_MAX = 300;
@@ -129,6 +138,9 @@ function switchTab(tabId) {
 
   // Notify main process about active tab
   window.api.setActiveTab(tab.filePath, tab.fileName);
+
+  // Update sidebar active highlight
+  if (sidebarVisible && folderTree) renderTree();
 }
 
 // ===== Tab bar rendering =====
@@ -613,6 +625,181 @@ searchCloseBtn.addEventListener('click', closeSearch);
 replaceBtn.addEventListener('click', replaceCurrent);
 replaceAllBtn.addEventListener('click', replaceAll);
 
+// ===== Sidebar =====
+function toggleSidebar() {
+  sidebarVisible = !sidebarVisible;
+  sidebar.style.display = sidebarVisible ? 'flex' : 'none';
+  sidebarResize.style.display = sidebarVisible ? 'block' : 'none';
+  localStorage.setItem('md-reader-sidebar', sidebarVisible ? '1' : '0');
+}
+
+function showSidebar() {
+  if (!sidebarVisible) toggleSidebar();
+}
+
+async function openFolder(folderPath) {
+  currentFolderPath = folderPath;
+  const result = await window.api.readDir(folderPath);
+  if (!result) return;
+  folderTree = result.tree;
+  sidebarTitle.textContent = result.root;
+  expandedDirs.clear();
+  renderTree();
+  showSidebar();
+  localStorage.setItem('md-reader-folder', folderPath);
+}
+
+function renderTree() {
+  sidebarTree.innerHTML = '';
+  if (!folderTree) return;
+  renderTreeNodes(folderTree, sidebarTree, 0);
+}
+
+function renderTreeNodes(nodes, container, depth) {
+  for (const node of nodes) {
+    const el = document.createElement('div');
+    el.className = 'tree-item';
+    el.style.paddingLeft = `${8 + depth * 16}px`;
+
+    // Highlight active file
+    const activeTab = getActiveTab();
+    if (!node.isDir && activeTab && activeTab.filePath === node.path) {
+      el.classList.add('active');
+    }
+
+    // Arrow
+    const arrow = document.createElement('span');
+    arrow.className = 'tree-item-arrow';
+    if (node.isDir) {
+      arrow.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 2L7 5L3 8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      if (expandedDirs.has(node.path)) arrow.classList.add('expanded');
+    } else {
+      arrow.classList.add('hidden');
+    }
+    el.appendChild(arrow);
+
+    // Icon
+    const icon = document.createElement('span');
+    icon.className = 'tree-item-icon';
+    if (node.isDir) {
+      icon.innerHTML = expandedDirs.has(node.path)
+        ? '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3.5C1 2.67 1.67 2 2.5 2H5.5L7 3.5H11.5C12.33 3.5 13 4.17 13 5V10.5C13 11.33 12.33 12 11.5 12H2.5C1.67 12 1 11.33 1 10.5V3.5Z" stroke="currentColor" stroke-width="1.1" fill="none"/></svg>'
+        : '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3.5C1 2.67 1.67 2 2.5 2H5.5L7 3.5H11.5C12.33 3.5 13 4.17 13 5V10.5C13 11.33 12.33 12 11.5 12H2.5C1.67 12 1 11.33 1 10.5V3.5Z" stroke="currentColor" stroke-width="1.1" fill="none"/></svg>';
+    } else {
+      const ext = node.name.split('.').pop().toLowerCase();
+      if (['puml', 'plantuml', 'pu', 'wsd'].includes(ext)) {
+        icon.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="1" width="10" height="12" rx="1.5" stroke="#6a9955" stroke-width="1.1"/><path d="M5 5L7 7L5 9" stroke="#6a9955" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      } else {
+        icon.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M3 1.5H8.5L11 4V12.5H3V1.5Z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><path d="M8.5 1.5V4H11" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+      }
+    }
+    el.appendChild(icon);
+
+    // Name
+    const name = document.createElement('span');
+    name.className = 'tree-item-name';
+    name.textContent = node.name;
+    el.appendChild(name);
+
+    // Click handler
+    if (node.isDir) {
+      el.addEventListener('click', () => {
+        if (expandedDirs.has(node.path)) {
+          expandedDirs.delete(node.path);
+        } else {
+          expandedDirs.add(node.path);
+        }
+        renderTree();
+      });
+    } else {
+      el.addEventListener('click', () => {
+        window.api.openFile().then(() => {}); // unused; we open directly
+        // Open file via the same mechanism
+        openFileFromSidebar(node.path);
+      });
+    }
+
+    container.appendChild(el);
+
+    // Render children if expanded
+    if (node.isDir && expandedDirs.has(node.path) && node.children) {
+      renderTreeNodes(node.children, container, depth + 1);
+    }
+  }
+}
+
+async function openFileFromSidebar(filePath) {
+  // Check if already open
+  const existing = tabs.find(t => t.filePath === filePath);
+  if (existing) {
+    switchTab(existing.id);
+    return;
+  }
+  // Use the reload-file IPC to read, then create tab
+  const result = await window.api.reloadFile(filePath);
+  if (!result) return;
+  const fileName = filePath.split('/').pop();
+  const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
+  const ext = fileName.split('.').pop().toLowerCase();
+  const isPuml = ['puml', 'plantuml', 'pu', 'wsd'].includes(ext);
+
+  // Reuse empty untitled tab
+  const active = getActiveTab();
+  if (active) active.content = editor.value;
+  if (active && !active.filePath && !active.isModified && active.content === '') {
+    active.fileName = fileName;
+    active.filePath = filePath;
+    active.dirPath = dirPath;
+    active.content = result.content;
+    active.isPuml = isPuml;
+    active.isModified = false;
+    if (isPuml) active.mode = 'preview';
+    editor.value = active.content;
+    fileNameEl.textContent = active.fileName;
+    setModeInternal(active.mode);
+    updateStats();
+    renderTabBar();
+    window.api.setActiveTab(active.filePath, active.fileName);
+  } else {
+    createTab({ fileName, filePath, dirPath, content: result.content, isPuml });
+  }
+  renderTree(); // Update active highlight
+}
+
+// Sidebar resize
+let resizing = false;
+sidebarResize.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  resizing = true;
+  sidebarResize.classList.add('dragging');
+  document.addEventListener('mousemove', onResizeMove);
+  document.addEventListener('mouseup', onResizeEnd);
+});
+
+function onResizeMove(e) {
+  if (!resizing) return;
+  const newWidth = e.clientX;
+  if (newWidth >= 160 && newWidth <= 480) {
+    sidebar.style.width = newWidth + 'px';
+  }
+}
+
+function onResizeEnd() {
+  resizing = false;
+  sidebarResize.classList.remove('dragging');
+  document.removeEventListener('mousemove', onResizeMove);
+  document.removeEventListener('mouseup', onResizeEnd);
+}
+
+sidebarOpenFolderBtn.addEventListener('click', async () => {
+  const folderPath = await window.api.openFolderDialog();
+  if (folderPath) openFolder(folderPath);
+});
+
+// Wire up sidebar IPC
+window.api.onFolderOpened(openFolder);
+window.api.onToggleSidebar(toggleSidebar);
+
 // ===== Init =====
 (function init() {
   const savedTheme = localStorage.getItem('md-reader-theme');
@@ -620,6 +807,13 @@ replaceAllBtn.addEventListener('click', replaceAll);
     setTheme(savedTheme);
   } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
     setTheme('dark');
+  }
+
+  // Restore sidebar state
+  const savedFolder = localStorage.getItem('md-reader-folder');
+  const savedSidebar = localStorage.getItem('md-reader-sidebar');
+  if (savedSidebar === '1' && savedFolder) {
+    openFolder(savedFolder);
   }
 
   // Start with one empty tab

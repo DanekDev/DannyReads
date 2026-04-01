@@ -109,11 +109,30 @@
     </div>
   </div>
 
-  <!-- Main content area -->
-  <div class="content">
-    <textarea id="editor" class="editor" spellcheck="false" placeholder="Start writing Markdown..."></textarea>
-    <div id="preview" class="preview" style="display: none;">
-      <div id="preview-inner" class="markdown-body"></div>
+  <!-- Main layout: sidebar + content -->
+  <div class="main-layout">
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar" style="display:none;">
+      <div class="sidebar-header">
+        <span class="sidebar-title" id="sidebar-title">Explorer</span>
+        <button class="sidebar-action-btn" id="sidebar-open-folder-btn" title="Open Folder (Cmd+Shift+O)">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M1 3.5C1 2.67 1.67 2 2.5 2H5.5L7 3.5H11.5C12.33 3.5 13 4.17 13 5V10.5C13 11.33 12.33 12 11.5 12H2.5C1.67 12 1 11.33 1 10.5V3.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="sidebar-tree" id="sidebar-tree"></div>
+    </div>
+
+    <!-- Resize handle -->
+    <div class="sidebar-resize" id="sidebar-resize" style="display:none;"></div>
+
+    <!-- Content area -->
+    <div class="content">
+      <textarea id="editor" class="editor" spellcheck="false" placeholder="Start writing Markdown..."></textarea>
+      <div id="preview" class="preview" style="display: none;">
+        <div id="preview-inner" class="markdown-body"></div>
+      </div>
     </div>
   </div>
 

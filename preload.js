@@ -110,6 +110,14 @@ contextBridge.exposeInMainWorld('api', {
   onGoToTab: (callback) => {
     ipcRenderer.on('go-to-tab', (_, index) => callback(index));
   },
+  readDir: (dirPath) => ipcRenderer.invoke('read-dir', dirPath),
+  openFolderDialog: () => ipcRenderer.invoke('open-folder-dialog'),
+  onFolderOpened: (callback) => {
+    ipcRenderer.on('folder-opened', (_, folderPath) => callback(folderPath));
+  },
+  onToggleSidebar: (callback) => {
+    ipcRenderer.on('toggle-sidebar', () => callback());
+  },
   exportPdf: (html, fileName) => ipcRenderer.invoke('export-pdf', html, fileName),
   onExportPdf: (callback) => {
     ipcRenderer.on('export-pdf', () => callback());

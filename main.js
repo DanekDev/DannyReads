@@ -161,6 +161,18 @@ function buildMenu() {
           accelerator: 'CmdOrCtrl+O',
           click: () => openFile(),
         },
+        {
+          label: 'Open Folder...',
+          accelerator: 'CmdOrCtrl+Shift+O',
+          click: async () => {
+            const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+              properties: ['openDirectory'],
+            });
+            if (!canceled && filePaths.length > 0) {
+              mainWindow.webContents.send('folder-opened', filePaths[0]);
+            }
+          },
+        },
         { type: 'separator' },
         {
           label: 'Close Tab',
@@ -212,6 +224,12 @@ function buildMenu() {
     {
       label: 'View',
       submenu: [
+        {
+          label: 'Toggle Sidebar',
+          accelerator: 'CmdOrCtrl+B',
+          click: () => mainWindow.webContents.send('toggle-sidebar'),
+        },
+        { type: 'separator' },
         {
           label: 'Toggle Edit / Preview',
           accelerator: 'CmdOrCtrl+Shift+P',
@@ -347,6 +365,58 @@ ipcMain.handle('confirm-close', async (_, tabId, fileName) => {
   if (response === 0) return 'save';
   if (response === 1) return 'discard';
   return 'cancel';
+});
+
+ipcMain.handle('open-folder-dialog', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+  });
+  if (!canceled && filePaths.length > 0) {
+    return filePaths[0];
+  }
+  return null;
+});
+
+// Read directory tree
+const SUPPORTED_EXTS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.txt', '.puml', '.plantuml', '.pu', '.wsd']);
+const IGNORED_DIRS = new Set(['.git', '.svn', 'node_modules', '.DS_Store', '__pycache__', '.claude']);
+
+async function readDirTree(dirPath, depth = 0) {
+  if (depth > 10) return [];
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
+  const result = [];
+
+  // Sort: folders first, then files, alphabetically
+  const sorted = entries
+    .filter(e => !IGNORED_DIRS.has(e.name) && !e.name.startsWith('.'))
+    .sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+  for (const entry of sorted) {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      const children = await readDirTree(fullPath, depth + 1);
+      result.push({ name: entry.name, path: fullPath, isDir: true, children });
+    } else {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (SUPPORTED_EXTS.has(ext)) {
+        result.push({ name: entry.name, path: fullPath, isDir: false });
+      }
+    }
+  }
+  return result;
+}
+
+ipcMain.handle('read-dir', async (_, dirPath) => {
+  try {
+    const tree = await readDirTree(dirPath);
+    return { root: path.basename(dirPath), rootPath: dirPath, tree };
+  } catch (err) {
+    return null;
+  }
 });
 
 // PDF Export
