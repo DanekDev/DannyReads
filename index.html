@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data:;">
   <title>DannyReads</title>
   <link rel="stylesheet" href="./node_modules/highlight.js/styles/github.css" id="hljs-light">
   <link rel="stylesheet" href="./node_modules/highlight.js/styles/github-dark.css" id="hljs-dark" disabled>
@@ -129,7 +129,7 @@
 
     <!-- Content area -->
     <div class="content">
-      <textarea id="editor" class="editor" spellcheck="false" placeholder="Start writing Markdown..."></textarea>
+      <div id="editor-host" class="editor-host"></div>
       <div id="preview" class="preview" style="display: none;">
         <div id="preview-inner" class="markdown-body"></div>
       </div>
@@ -142,6 +142,7 @@
     <span id="status-mode">Edit</span>
   </div>
 
+  <script src="./editor-bundle.js"></script>
   <script src="./renderer.js"></script>
 </body>
 </html>

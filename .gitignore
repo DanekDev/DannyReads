@@ -3,3 +3,4 @@ dist/
 *.dmg
 *.blockmap
 vendor/plantuml.jar
+editor-bundle.js

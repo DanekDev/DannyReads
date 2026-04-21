@@ -1,12 +1,16 @@
-const { app, BrowserWindow, dialog, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, Menu, ipcMain, shell, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const { execFile } = require('child_process');
+const chokidar = require('chokidar');
 
 let mainWindow;
 let currentFilePath = null;
 let isModified = false;
 let pendingFile = null;
+let watcher = null;
+let watchedRoot = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -33,7 +37,7 @@ function createWindow() {
 
   mainWindow.webContents.on('did-finish-load', () => {
     // Open file passed via CLI or Finder
-    const fileToOpen = pendingFile || process.argv.find(a => /\.(md|markdown|txt|puml|plantuml|pu|wsd)$/.test(a));
+    const fileToOpen = pendingFile || process.argv.find(a => /\.(md|markdown|txt|puml|plantuml|pu|wsd|mmd)$/.test(a));
     if (fileToOpen) {
       pendingFile = null;
       openFile(fileToOpen);
@@ -55,9 +59,10 @@ async function openFile(filePath) {
     const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile', 'multipleSelections'],
       filters: [
-        { name: 'All Supported', extensions: ['md', 'markdown', 'mdown', 'mkd', 'txt', 'puml', 'plantuml', 'pu', 'wsd'] },
+        { name: 'All Supported', extensions: ['md', 'markdown', 'mdown', 'mkd', 'txt', 'puml', 'plantuml', 'pu', 'wsd', 'mmd'] },
         { name: 'Markdown', extensions: ['md', 'markdown', 'mdown', 'mkd', 'txt'] },
         { name: 'PlantUML', extensions: ['puml', 'plantuml', 'pu', 'wsd'] },
+        { name: 'Mermaid', extensions: ['mmd'] },
         { name: 'All Files', extensions: ['*'] },
       ],
     });
@@ -75,12 +80,14 @@ async function openFile(filePath) {
     updateTitle();
     const ext = path.extname(filePath).toLowerCase();
     const isPuml = ['.puml', '.plantuml', '.pu', '.wsd'].includes(ext);
+    const isMermaid = ext === '.mmd';
     mainWindow.webContents.send('file-opened', {
       content,
       filePath,
       fileName: path.basename(filePath),
       dirPath: path.dirname(filePath),
       isPuml,
+      isMermaid,
     });
     return { success: true };
   } catch (err) {
@@ -328,6 +335,7 @@ ipcMain.on('stop-find-in-page', () => {
 
 // IPC Handlers
 ipcMain.handle('open-file', () => openFile());
+ipcMain.handle('open-file-path', (_, filePath) => openFile(filePath));
 ipcMain.handle('reload-file', async (_, filePath) => {
   if (!filePath) return null;
   try {
@@ -378,7 +386,46 @@ ipcMain.handle('open-folder-dialog', async () => {
 });
 
 // Read directory tree
-const SUPPORTED_EXTS = new Set(['.md', '.markdown', '.mdown', '.mkd', '.txt', '.puml', '.plantuml', '.pu', '.wsd']);
+// Broad whitelist of text/code file extensions (ADR-005)
+const SUPPORTED_EXTS = new Set([
+  // Markdown & docs
+  '.md', '.markdown', '.mdown', '.mkd', '.mdx', '.txt', '.rst', '.adoc', '.org',
+  // Diagrams
+  '.puml', '.plantuml', '.pu', '.wsd', '.mmd',
+  // Data
+  '.json', '.jsonc', '.json5', '.yaml', '.yml', '.toml', '.ini', '.conf', '.env',
+  '.csv', '.tsv', '.xml', '.plist',
+  // Web
+  '.html', '.htm', '.css', '.scss', '.sass', '.less', '.svg',
+  // Code — JS/TS
+  '.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx',
+  // Code — backend & systems
+  '.py', '.rb', '.go', '.rs', '.java', '.kt', '.kts', '.scala', '.swift',
+  '.c', '.h', '.cpp', '.cc', '.hpp', '.cs', '.m', '.mm',
+  '.php', '.pl', '.lua', '.r', '.jl', '.ex', '.exs', '.erl', '.hs', '.elm',
+  // Shell
+  '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
+  // Build & configs
+  '.dockerfile', '.makefile', '.mk', '.cmake', '.gradle', '.sbt',
+  '.lock', '.gitignore', '.gitattributes', '.editorconfig',
+  // SQL & data query
+  '.sql', '.graphql', '.gql',
+  // Other
+  '.log', '.diff', '.patch', '.tex', '.bib',
+]);
+
+// Files with these exact names (no extension) are treated as text
+const SUPPORTED_BASENAMES = new Set([
+  'Makefile', 'makefile', 'Dockerfile', 'dockerfile', 'Jenkinsfile',
+  'Rakefile', 'Gemfile', 'Procfile', 'Pipfile', 'CHANGELOG', 'LICENSE',
+  'README', 'CONTRIBUTING', 'AUTHORS', 'NOTICE', 'TODO',
+]);
+
+function isSupportedFile(name) {
+  if (SUPPORTED_BASENAMES.has(name)) return true;
+  const ext = path.extname(name).toLowerCase();
+  return SUPPORTED_EXTS.has(ext);
+}
 const IGNORED_DIRS = new Set(['.git', '.svn', 'node_modules', '.DS_Store', '__pycache__', '.claude']);
 
 async function readDirTree(dirPath, depth = 0) {
@@ -401,8 +448,7 @@ async function readDirTree(dirPath, depth = 0) {
       const children = await readDirTree(fullPath, depth + 1);
       result.push({ name: entry.name, path: fullPath, isDir: true, children });
     } else {
-      const ext = path.extname(entry.name).toLowerCase();
-      if (SUPPORTED_EXTS.has(ext)) {
+      if (isSupportedFile(entry.name)) {
         result.push({ name: entry.name, path: fullPath, isDir: false });
       }
     }
@@ -417,6 +463,160 @@ ipcMain.handle('read-dir', async (_, dirPath) => {
   } catch (err) {
     return null;
   }
+});
+
+// ===== File system watcher =====
+// Coalesces rapid bursts of fs events into batched updates sent to renderer.
+// The renderer re-issues read-dir on batch; diffs itself. Simpler than TreeEvent
+// reducers and correct enough for <10k-file vaults.
+
+let watcherEventBuffer = [];
+let watcherFlushTimer = null;
+
+function scheduleWatcherFlush() {
+  if (watcherFlushTimer) return;
+  watcherFlushTimer = setTimeout(() => {
+    watcherFlushTimer = null;
+    if (watcherEventBuffer.length === 0) return;
+    const events = watcherEventBuffer;
+    watcherEventBuffer = [];
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('fs-changed', { root: watchedRoot, events });
+    }
+  }, 100);
+}
+
+function stopWatcher() {
+  if (watcher) {
+    watcher.close().catch(() => {});
+    watcher = null;
+    watchedRoot = null;
+    watcherEventBuffer = [];
+    if (watcherFlushTimer) {
+      clearTimeout(watcherFlushTimer);
+      watcherFlushTimer = null;
+    }
+  }
+}
+
+function startWatcher(rootPath) {
+  stopWatcher();
+  watchedRoot = rootPath;
+
+  watcher = chokidar.watch(rootPath, {
+    ignoreInitial: true,
+    ignored: [
+      /(^|[\\/])\../,        // dotfiles and dot-dirs (.git, .DS_Store, .claude)
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/build/**',
+      '**/__pycache__/**',
+    ],
+    awaitWriteFinish: { stabilityThreshold: 250, pollInterval: 100 },
+    depth: 12,
+    followSymlinks: false,
+    atomic: 100,
+  });
+
+  const enqueue = (op, p, kind) => {
+    watcherEventBuffer.push({ op, path: p, kind });
+    scheduleWatcherFlush();
+  };
+
+  watcher.on('add', (p) => enqueue('add', p, 'file'));
+  watcher.on('addDir', (p) => enqueue('add', p, 'dir'));
+  watcher.on('unlink', (p) => enqueue('unlink', p, 'file'));
+  watcher.on('unlinkDir', (p) => enqueue('unlink', p, 'dir'));
+  watcher.on('change', (p) => enqueue('change', p, 'file'));
+  watcher.on('error', (err) => {
+    console.error('[watcher]', err.message);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('fs-watcher-error', { message: err.message });
+    }
+  });
+}
+
+ipcMain.on('watch-folder', (_, folderPath) => {
+  if (!folderPath) return;
+  if (watchedRoot === folderPath) return; // already watching
+  startWatcher(folderPath);
+});
+
+ipcMain.on('unwatch-folder', () => {
+  stopWatcher();
+});
+
+// ===== File operations (for sidebar context menu) =====
+
+ipcMain.handle('fs-create-file', async (_, dirPath, name) => {
+  try {
+    const fullPath = path.join(dirPath, name);
+    // Refuse to overwrite existing
+    try {
+      await fs.access(fullPath);
+      return { success: false, error: 'File already exists' };
+    } catch { /* doesn't exist, good */ }
+    await fs.writeFile(fullPath, '', 'utf-8');
+    return { success: true, path: fullPath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('fs-create-folder', async (_, dirPath, name) => {
+  try {
+    const fullPath = path.join(dirPath, name);
+    await fs.mkdir(fullPath, { recursive: false });
+    return { success: true, path: fullPath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('fs-rename', async (_, oldPath, newName) => {
+  try {
+    const newPath = path.join(path.dirname(oldPath), newName);
+    if (oldPath === newPath) return { success: true, path: newPath };
+    try {
+      await fs.access(newPath);
+      return { success: false, error: 'A file with that name already exists' };
+    } catch { /* doesn't exist */ }
+    await fs.rename(oldPath, newPath);
+    return { success: true, path: newPath, oldPath };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('fs-delete', async (_, targetPath) => {
+  try {
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ['Move to Trash', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+      message: `Move "${path.basename(targetPath)}" to Trash?`,
+    });
+    if (response !== 0) return { success: false, cancelled: true };
+    await shell.trashItem(targetPath);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('fs-reveal', async (_, targetPath) => {
+  try {
+    shell.showItemInFolder(targetPath);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('fs-copy-path', async (_, targetPath) => {
+  clipboard.writeText(targetPath);
+  return { success: true };
 });
 
 // PDF Export
@@ -492,6 +692,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  stopWatcher();
   app.quit();
 });
 

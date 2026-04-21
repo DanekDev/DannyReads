@@ -34,6 +34,13 @@ try {
             return `<div class="plantuml-diagram" id="${id}"><div class="plantuml-loading">Rendering diagram...</div></div>\n`;
           }
 
+          // Mermaid — insert placeholder, render in DOM
+          if (lang === 'mermaid') {
+            const id = 'mermaid-' + Math.random().toString(36).slice(2, 10);
+            const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return `<div class="mermaid-diagram" id="${id}">${escaped}</div>\n`;
+          }
+
           // Regular code highlighting
           let highlighted;
           if (lang && hljs.getLanguage(lang)) {
@@ -65,6 +72,7 @@ function renderMarkdown(text) {
 
 contextBridge.exposeInMainWorld('api', {
   openFile: () => ipcRenderer.invoke('open-file'),
+  openFilePath: (filePath) => ipcRenderer.invoke('open-file-path', filePath),
   reloadFile: (filePath) => ipcRenderer.invoke('reload-file', filePath),
   saveFile: (content) => ipcRenderer.invoke('save-file', content),
   saveFileAs: (content) => ipcRenderer.invoke('save-file-as', content),
@@ -112,6 +120,21 @@ contextBridge.exposeInMainWorld('api', {
   },
   readDir: (dirPath) => ipcRenderer.invoke('read-dir', dirPath),
   openFolderDialog: () => ipcRenderer.invoke('open-folder-dialog'),
+  watchFolder: (folderPath) => ipcRenderer.send('watch-folder', folderPath),
+  unwatchFolder: () => ipcRenderer.send('unwatch-folder'),
+  onFsChanged: (callback) => {
+    ipcRenderer.on('fs-changed', (_, data) => callback(data));
+  },
+  onFsWatcherError: (callback) => {
+    ipcRenderer.on('fs-watcher-error', (_, data) => callback(data));
+  },
+  // File operations
+  fsCreateFile: (dirPath, name) => ipcRenderer.invoke('fs-create-file', dirPath, name),
+  fsCreateFolder: (dirPath, name) => ipcRenderer.invoke('fs-create-folder', dirPath, name),
+  fsRename: (oldPath, newName) => ipcRenderer.invoke('fs-rename', oldPath, newName),
+  fsDelete: (targetPath) => ipcRenderer.invoke('fs-delete', targetPath),
+  fsReveal: (targetPath) => ipcRenderer.invoke('fs-reveal', targetPath),
+  fsCopyPath: (targetPath) => ipcRenderer.invoke('fs-copy-path', targetPath),
   onFolderOpened: (callback) => {
     ipcRenderer.on('folder-opened', (_, folderPath) => callback(folderPath));
   },

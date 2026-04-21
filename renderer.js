@@ -4,7 +4,7 @@ let activeTabId = null;
 let tabIdCounter = 0;
 
 // Elements
-const editor = document.getElementById('editor');
+const editorHost = document.getElementById('editor-host');
 const preview = document.getElementById('preview');
 const editBtn = document.getElementById('edit-btn');
 const previewBtn = document.getElementById('preview-btn');
@@ -49,6 +49,43 @@ const ZOOM_STEP = 10;
 const ZOOM_MIN = 30;
 const ZOOM_MAX = 300;
 
+// ===== CodeMirror editor + textarea-compatible shim =====
+// The rest of the code was written against a <textarea>; this shim preserves that API
+// (editor.value, editor.selectionStart, setSelectionRange, focus, style.display, addEventListener).
+let cmInstance = null;
+const editorListeners = { input: [], keydown: [] };
+let suppressInputEvent = false;
+
+cmInstance = window.DannyEditor.createEditor(editorHost, {
+  initialValue: '',
+  onChange: () => {
+    if (suppressInputEvent) return;
+    for (const cb of editorListeners.input) cb({ target: editor });
+  },
+});
+
+const editor = {
+  get value() { return cmInstance.getValue(); },
+  set value(v) {
+    // Programmatic sets (e.g. tab switch, file load) must not fire the "input" listener,
+    // otherwise every tab switch would mark the tab as modified.
+    suppressInputEvent = true;
+    try { cmInstance.setValue(v); } finally {
+      // Let the update propagate before re-enabling
+      queueMicrotask(() => { suppressInputEvent = false; });
+    }
+  },
+  get selectionStart() { return cmInstance.getSelection().from; },
+  get selectionEnd() { return cmInstance.getSelection().to; },
+  setSelectionRange(from, to) { cmInstance.setSelection(from, to); },
+  focus() { cmInstance.focus(); },
+  style: editorHost.style,
+  addEventListener(evt, cb) {
+    if (editorListeners[evt]) editorListeners[evt].push(cb);
+  },
+  _cm: cmInstance,
+};
+
 // ===== Tab helpers =====
 function generateTabId() {
   return ++tabIdCounter;
@@ -66,7 +103,8 @@ function createTab(opts = {}) {
     dirPath: opts.dirPath || null,
     content: opts.content || '',
     isPuml: opts.isPuml || false,
-    mode: opts.isPuml ? 'preview' : 'edit',
+    isMermaid: opts.isMermaid || false,
+    mode: (opts.isPuml || opts.isMermaid) ? 'preview' : 'edit',
     zoom: 100,
     isModified: false,
   };
@@ -129,8 +167,9 @@ function switchTab(tabId) {
   const tab = getActiveTab();
   if (!tab) return;
 
-  // Restore tab content
+  // Restore tab content and set language based on filename
   editor.value = tab.content;
+  if (cmInstance) cmInstance.setLanguage(tab.fileName);
   fileNameEl.textContent = tab.fileName;
   setModeInternal(tab.mode);
   updateStats();
@@ -148,7 +187,10 @@ function renderTabBar() {
   tabList.innerHTML = '';
   tabs.forEach(tab => {
     const el = document.createElement('div');
-    el.className = 'tab-item' + (tab.id === activeTabId ? ' active' : '') + (tab.isModified ? ' modified' : '');
+    el.className = 'tab-item'
+      + (tab.id === activeTabId ? ' active' : '')
+      + (tab.isModified ? ' modified' : '')
+      + (tab.missing ? ' missing' : '');
     el.dataset.tabId = tab.id;
 
     const nameSpan = document.createElement('span');
@@ -247,6 +289,8 @@ function renderPreview() {
   let source = editor.value;
   if (tab && tab.isPuml) {
     source = '```plantuml\n' + source + '\n```';
+  } else if (tab && tab.isMermaid) {
+    source = '```mermaid\n' + source + '\n```';
   }
   let html = window.api.renderMarkdown(source);
   const dirPath = tab ? tab.dirPath : null;
@@ -257,6 +301,44 @@ function renderPreview() {
     );
   }
   previewInner.innerHTML = html;
+  renderMermaidDiagrams();
+}
+
+async function renderMermaidDiagrams() {
+  const diagrams = previewInner.querySelectorAll('.mermaid-diagram');
+  if (diagrams.length === 0) return;
+  if (!window.mermaidReady) {
+    try {
+      const mermaid = (await import('./node_modules/mermaid/dist/mermaid.esm.min.mjs')).default;
+      const isDark = document.body.getAttribute('data-theme') === 'dark';
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: isDark ? 'dark' : 'default',
+        securityLevel: 'loose',
+      });
+      window.mermaidLib = mermaid;
+      window.mermaidReady = true;
+    } catch (e) {
+      console.error('Failed to load mermaid:', e);
+      diagrams.forEach(d => {
+        d.innerHTML = '<div class="mermaid-error">Failed to load Mermaid</div>';
+      });
+      return;
+    }
+  } else {
+    // Update theme on each render
+    const isDark = document.body.getAttribute('data-theme') === 'dark';
+    window.mermaidLib.initialize({
+      startOnLoad: false,
+      theme: isDark ? 'dark' : 'default',
+      securityLevel: 'loose',
+    });
+  }
+  try {
+    await window.mermaidLib.run({ nodes: diagrams });
+  } catch (e) {
+    console.error('Mermaid render error:', e);
+  }
 }
 
 async function reloadAndRender() {
@@ -284,6 +366,7 @@ function setTheme(theme) {
   hljsDark.disabled = theme === 'light';
   themeIconLight.style.display = theme === 'light' ? 'block' : 'none';
   themeIconDark.style.display = theme === 'dark' ? 'block' : 'none';
+  if (cmInstance) cmInstance.setTheme(theme);
   localStorage.setItem('md-reader-theme', theme);
 }
 
@@ -330,16 +413,7 @@ preview.addEventListener('click', (e) => {
 });
 
 // ===== Tab key support =====
-editor.addEventListener('keydown', (e) => {
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    const start = editor.selectionStart;
-    const end = editor.selectionEnd;
-    const value = editor.value;
-    editor.value = value.substring(0, start) + '  ' + value.substring(end);
-    editor.selectionStart = editor.selectionEnd = start + 2;
-  }
-});
+// Tab handling provided by CodeMirror's indentWithTab keymap
 
 // ===== Editor input =====
 editor.addEventListener('input', () => {
@@ -371,9 +445,11 @@ document.addEventListener('dragover', (e) => {
 document.addEventListener('drop', (e) => {
   e.preventDefault();
   e.stopPropagation();
-  const file = e.dataTransfer.files[0];
-  if (file && file.path) {
-    window.api.openFile();
+  const files = Array.from(e.dataTransfer.files || []);
+  for (const file of files) {
+    if (file && file.path) {
+      window.api.openFilePath(file.path);
+    }
   }
 });
 
@@ -397,8 +473,9 @@ window.api.onFileOpened((data) => {
     active.dirPath = data.dirPath;
     active.content = data.content;
     active.isPuml = data.isPuml || false;
+    active.isMermaid = data.isMermaid || false;
     active.isModified = false;
-    if (active.isPuml) active.mode = 'preview';
+    if (active.isPuml || active.isMermaid) active.mode = 'preview';
     editor.value = active.content;
     fileNameEl.textContent = active.fileName;
     setModeInternal(active.mode);
@@ -415,6 +492,7 @@ window.api.onFileOpened((data) => {
     dirPath: data.dirPath,
     content: data.content,
     isPuml: data.isPuml || false,
+    isMermaid: data.isMermaid || false,
   });
 });
 
@@ -452,6 +530,8 @@ window.api.onExportPdf(async () => {
   let source = editor.value;
   if (tab && tab.isPuml) {
     source = '```plantuml\n' + source + '\n```';
+  } else if (tab && tab.isMermaid) {
+    source = '```mermaid\n' + source + '\n```';
   }
   let html = window.api.renderMarkdown(source);
   const dirPath = tab ? tab.dirPath : null;
@@ -643,10 +723,27 @@ async function openFolder(folderPath) {
   if (!result) return;
   folderTree = result.tree;
   sidebarTitle.textContent = result.root;
-  expandedDirs.clear();
+  // Preserve expanded folders when reopening same root, clear otherwise
   renderTree();
   showSidebar();
   localStorage.setItem('md-reader-folder', folderPath);
+  // Start filesystem watcher
+  window.api.watchFolder(folderPath);
+}
+
+// Refresh tree from disk, preserving expanded/selected state (invariants I2, I3)
+let refreshPending = false;
+async function refreshFolderTree() {
+  if (refreshPending || !currentFolderPath) return;
+  refreshPending = true;
+  try {
+    const result = await window.api.readDir(currentFolderPath);
+    if (!result) return;
+    folderTree = result.tree;
+    renderTree();
+  } finally {
+    refreshPending = false;
+  }
 }
 
 function renderTree() {
@@ -713,11 +810,16 @@ function renderTreeNodes(nodes, container, depth) {
       });
     } else {
       el.addEventListener('click', () => {
-        window.api.openFile().then(() => {}); // unused; we open directly
-        // Open file via the same mechanism
         openFileFromSidebar(node.path);
       });
     }
+
+    // Right-click context menu
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showTreeContextMenu(e.clientX, e.clientY, node);
+    });
 
     container.appendChild(el);
 
@@ -742,6 +844,7 @@ async function openFileFromSidebar(filePath) {
   const dirPath = filePath.substring(0, filePath.lastIndexOf('/'));
   const ext = fileName.split('.').pop().toLowerCase();
   const isPuml = ['puml', 'plantuml', 'pu', 'wsd'].includes(ext);
+  const isMermaid = ext === 'mmd';
 
   // Reuse empty untitled tab
   const active = getActiveTab();
@@ -752,8 +855,9 @@ async function openFileFromSidebar(filePath) {
     active.dirPath = dirPath;
     active.content = result.content;
     active.isPuml = isPuml;
+    active.isMermaid = isMermaid;
     active.isModified = false;
-    if (isPuml) active.mode = 'preview';
+    if (isPuml || isMermaid) active.mode = 'preview';
     editor.value = active.content;
     fileNameEl.textContent = active.fileName;
     setModeInternal(active.mode);
@@ -761,9 +865,195 @@ async function openFileFromSidebar(filePath) {
     renderTabBar();
     window.api.setActiveTab(active.filePath, active.fileName);
   } else {
-    createTab({ fileName, filePath, dirPath, content: result.content, isPuml });
+    createTab({ fileName, filePath, dirPath, content: result.content, isPuml, isMermaid });
   }
   renderTree(); // Update active highlight
+}
+
+// ===== Sidebar context menu =====
+const contextMenuEl = document.createElement('div');
+contextMenuEl.className = 'context-menu';
+contextMenuEl.style.display = 'none';
+document.body.appendChild(contextMenuEl);
+
+function hideContextMenu() {
+  contextMenuEl.style.display = 'none';
+  contextMenuEl.innerHTML = '';
+}
+
+document.addEventListener('click', hideContextMenu);
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hideContextMenu();
+});
+
+function showContextMenu(x, y, items) {
+  contextMenuEl.innerHTML = '';
+  for (const item of items) {
+    if (item.separator) {
+      const sep = document.createElement('div');
+      sep.className = 'context-menu-separator';
+      contextMenuEl.appendChild(sep);
+      continue;
+    }
+    const row = document.createElement('div');
+    row.className = 'context-menu-item' + (item.disabled ? ' disabled' : '');
+    row.textContent = item.label;
+    if (!item.disabled) {
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideContextMenu();
+        item.action();
+      });
+    }
+    contextMenuEl.appendChild(row);
+  }
+  // Position and clamp to viewport
+  contextMenuEl.style.display = 'block';
+  const rect = contextMenuEl.getBoundingClientRect();
+  const maxX = window.innerWidth - rect.width - 8;
+  const maxY = window.innerHeight - rect.height - 8;
+  contextMenuEl.style.left = Math.min(x, maxX) + 'px';
+  contextMenuEl.style.top = Math.min(y, maxY) + 'px';
+}
+
+function showTreeContextMenu(x, y, node) {
+  const parentDir = node.isDir ? node.path : node.path.substring(0, node.path.lastIndexOf('/'));
+  const items = [];
+
+  if (node.isDir) {
+    items.push({ label: 'New File', action: () => promptNewFile(node.path) });
+    items.push({ label: 'New Folder', action: () => promptNewFolder(node.path) });
+    items.push({ separator: true });
+  } else {
+    items.push({ label: 'Open', action: () => openFileFromSidebar(node.path) });
+    items.push({ separator: true });
+  }
+
+  items.push({ label: 'Reveal in Finder', action: () => window.api.fsReveal(node.path) });
+  items.push({ label: 'Copy Path', action: () => window.api.fsCopyPath(node.path) });
+  items.push({ separator: true });
+  items.push({ label: 'Rename…', action: () => promptRename(node) });
+  items.push({ label: 'Delete', action: () => deleteNode(node) });
+
+  showContextMenu(x, y, items);
+}
+
+function showTreeEmptyContextMenu(x, y) {
+  if (!currentFolderPath) return;
+  showContextMenu(x, y, [
+    { label: 'New File', action: () => promptNewFile(currentFolderPath) },
+    { label: 'New Folder', action: () => promptNewFolder(currentFolderPath) },
+    { separator: true },
+    { label: 'Reveal in Finder', action: () => window.api.fsReveal(currentFolderPath) },
+    { label: 'Refresh', action: refreshFolderTree },
+  ]);
+}
+
+// Right-click on empty tree area
+sidebarTree.addEventListener('contextmenu', (e) => {
+  if (e.target === sidebarTree || e.target.classList.contains('sidebar-tree')) {
+    e.preventDefault();
+    showTreeEmptyContextMenu(e.clientX, e.clientY);
+  }
+});
+
+// ===== Inline prompt for name input =====
+function promptInline(title, initialValue, onSubmit) {
+  const overlay = document.createElement('div');
+  overlay.className = 'prompt-overlay';
+  overlay.innerHTML = `
+    <div class="prompt-dialog">
+      <div class="prompt-title">${title}</div>
+      <input type="text" class="prompt-input" spellcheck="false" />
+      <div class="prompt-buttons">
+        <button class="prompt-btn prompt-cancel">Cancel</button>
+        <button class="prompt-btn prompt-ok">OK</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector('.prompt-input');
+  const okBtn = overlay.querySelector('.prompt-ok');
+  const cancelBtn = overlay.querySelector('.prompt-cancel');
+  input.value = initialValue || '';
+  setTimeout(() => { input.focus(); input.select(); }, 10);
+
+  const close = () => overlay.remove();
+  const submit = () => {
+    const val = input.value.trim();
+    if (!val) return;
+    close();
+    onSubmit(val);
+  };
+  okBtn.addEventListener('click', submit);
+  cancelBtn.addEventListener('click', close);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); submit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(); }
+  });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+}
+
+async function promptNewFile(dirPath) {
+  promptInline('New File', 'untitled.md', async (name) => {
+    const res = await window.api.fsCreateFile(dirPath, name);
+    if (!res.success) {
+      alert(res.error || 'Failed to create file');
+      return;
+    }
+    // Expand parent, refresh, open
+    expandedDirs.add(dirPath);
+    await refreshFolderTree();
+    openFileFromSidebar(res.path);
+  });
+}
+
+async function promptNewFolder(dirPath) {
+  promptInline('New Folder', 'new-folder', async (name) => {
+    const res = await window.api.fsCreateFolder(dirPath, name);
+    if (!res.success) {
+      alert(res.error || 'Failed to create folder');
+      return;
+    }
+    expandedDirs.add(dirPath);
+    expandedDirs.add(res.path);
+    await refreshFolderTree();
+  });
+}
+
+async function promptRename(node) {
+  promptInline('Rename', node.name, async (newName) => {
+    if (newName === node.name) return;
+    const res = await window.api.fsRename(node.path, newName);
+    if (!res.success) {
+      alert(res.error || 'Failed to rename');
+      return;
+    }
+    // Update any open tabs that refer to this path
+    renameTabPath(node.path, res.path);
+    if (node.isDir) {
+      // Update expanded set
+      if (expandedDirs.has(node.path)) {
+        expandedDirs.delete(node.path);
+        expandedDirs.add(res.path);
+      }
+    }
+    await refreshFolderTree();
+  });
+}
+
+async function deleteNode(node) {
+  const res = await window.api.fsDelete(node.path);
+  if (res.cancelled) return;
+  if (!res.success) {
+    alert(res.error || 'Failed to delete');
+    return;
+  }
+  // Refresh will reflect the deletion; mark any open tabs as missing
+  if (!node.isDir) {
+    markTabMissing(node.path);
+  }
+  await refreshFolderTree();
 }
 
 // Sidebar resize
@@ -799,6 +1089,74 @@ sidebarOpenFolderBtn.addEventListener('click', async () => {
 // Wire up sidebar IPC
 window.api.onFolderOpened(openFolder);
 window.api.onToggleSidebar(toggleSidebar);
+
+// ===== Filesystem auto-refresh (ADR-002) =====
+// Receive batched fs events from main; refresh tree + reconcile tab states.
+window.api.onFsChanged(({ events }) => {
+  if (!events || events.length === 0) return;
+
+  // Detect renames: pair unlink+add within same batch with same basename
+  const unlinks = events.filter(e => e.op === 'unlink' && e.kind === 'file');
+  const adds = events.filter(e => e.op === 'add' && e.kind === 'file');
+  const renames = [];
+  const consumedUnlinks = new Set();
+  const consumedAdds = new Set();
+  for (const u of unlinks) {
+    const match = adds.find(a => !consumedAdds.has(a.path) && basename(a.path) === basename(u.path));
+    if (match) {
+      renames.push({ from: u.path, to: match.path });
+      consumedUnlinks.add(u.path);
+      consumedAdds.add(match.path);
+    }
+  }
+
+  // Apply tab reactions
+  for (const ev of events) {
+    if (ev.op === 'unlink' && ev.kind === 'file' && !consumedUnlinks.has(ev.path)) {
+      markTabMissing(ev.path);
+    } else if (ev.op === 'change' && ev.kind === 'file') {
+      // Ask user if we should reload (for now: silent — editor reload is a separate spec)
+    }
+  }
+  for (const r of renames) {
+    renameTabPath(r.from, r.to);
+  }
+
+  // Refresh tree view
+  refreshFolderTree();
+});
+
+window.api.onFsWatcherError(({ message }) => {
+  console.warn('[fs-watcher]', message);
+});
+
+function basename(p) {
+  return p.substring(p.lastIndexOf('/') + 1);
+}
+
+function markTabMissing(filePath) {
+  const tab = tabs.find(t => t.filePath === filePath);
+  if (!tab) return;
+  tab.missing = true;
+  renderTabBar();
+  if (tab.id === activeTabId) {
+    fileNameEl.textContent = tab.fileName + ' (missing)';
+  }
+}
+
+function renameTabPath(oldPath, newPath) {
+  const tab = tabs.find(t => t.filePath === oldPath);
+  if (!tab) return;
+  tab.filePath = newPath;
+  tab.fileName = basename(newPath);
+  tab.dirPath = newPath.substring(0, newPath.lastIndexOf('/'));
+  tab.missing = false;
+  renderTabBar();
+  if (tab.id === activeTabId) {
+    fileNameEl.textContent = tab.fileName;
+    window.api.setActiveTab(tab.filePath, tab.fileName);
+  }
+}
 
 // ===== Init =====
 (function init() {
